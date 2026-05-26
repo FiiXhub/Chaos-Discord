@@ -869,6 +869,27 @@ client.once(Events.ClientReady, async () => {
     const memory = process.memoryUsage().rss / 1024 / 1024;
     console.log(`💓 Heartbeat: Bot is healthy | Memory: ${memory.toFixed(2)} MB | Uptime: ${Math.floor(process.uptime() / 60)}m`);
   }, 600000);
+
+  // Auto-refresh member list from Supabase every 60 seconds
+  setInterval(async () => {
+    try {
+      const dbMembers = await dbLoadAllMembers();
+      for (const [guildId, members] of Object.entries(dbMembers)) {
+        const guildData = getGuildMembers(guildId);
+        const currentCount = Object.keys(guildData.members).length;
+        const newCount = Object.keys(members).length;
+        // Only refresh if member count changed (data added/removed from WA or other source)
+        if (currentCount !== newCount || JSON.stringify(guildData.members) !== JSON.stringify(members)) {
+          guildData.members = members;
+          saveMembers();
+          const guild = client.guilds.cache.find(g => g.id === guildId);
+          if (guild) await updateMemberListEmbed(guild, guildId);
+        }
+      }
+    } catch (err) {
+      // Silent fail - don't spam console
+    }
+  }, 60000); // Check every 60 seconds
 });
 
 /* ================= REAL-TIME STATS UPDATER ================= */
