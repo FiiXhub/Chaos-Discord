@@ -530,7 +530,7 @@ const SETUP_CATEGORIES = {
 
 const ROLE_STEPS = [
   { key: "verify", label: "✅ Verify Role", description: "Role yang diberikan setelah verifikasi" },
-  { key: "member", label: "📋 Member Role", description: "Role untuk member yang sudah Input Data" },
+  { key: "member", label: "📋 Member Role", description: "Role untuk member yang sudah Input Data (auto-assign)" },
   { key: "man", label: "💪 Man Role", description: "Role untuk Laki-laki" },
   { key: "woman", label: "🌸 Woman Role", description: "Role untuk Perempuan" },
   { key: "owner", label: "👑 Owner Role", description: "Role untuk Owner server" },
@@ -597,8 +597,7 @@ async function deployPanels(guild, config, channels) {
           .setTitle("✨ Select Your Identity")
           .setDescription(
             "Welcome to the identity selection! Please choose your role below to personalize your experience in our community.\n\n" +
-            "📋 **MEMBER** - Ambil role member (wajib Input Data dulu)\n" +
-            "💪 **MAN** - Identify as male\n" +
+            "� **MAN** - Identify as male\n" +
             "🌸 **WOMAN** - Identify as female\n" +
             "👑 **ADMIN** - Request for administrative role (requires review)"
           )
@@ -606,11 +605,10 @@ async function deployPanels(guild, config, channels) {
           .setFooter({ text: "FiiCruzh Premium System", iconURL: guild.iconURL() })
           .setTimestamp();
         const rRow = new ActionRowBuilder().addComponents(
-          new ButtonBuilder().setCustomId("member_role").setLabel("MEMBER 📋").setStyle(ButtonStyle.Success),
-          new ButtonBuilder().setCustomId("man_role").setLabel("MAN 💪").setStyle(ButtonStyle.Primary),
+          new ButtonBuilder().setCustomId("man_role").setLabel("MAN �").setStyle(ButtonStyle.Primary),
           new ButtonBuilder().setCustomId("woman_role").setLabel("WOMAN 🌸").setStyle(ButtonStyle.Secondary),
           new ButtonBuilder().setCustomId("admin_role").setLabel("ADMIN 👑").setStyle(ButtonStyle.Danger),
-          new ButtonBuilder().setCustomId("profile_button").setLabel("MY PROFILE 👤").setStyle(ButtonStyle.Success)
+          new ButtonBuilder().setCustomId("profile_button").setLabel("MY PROFILE �").setStyle(ButtonStyle.Success)
         );
         await roleCh.send({ embeds: [rEmbed], components: [rRow] });
         results.success.push("Role Panel");
@@ -846,8 +844,16 @@ client.once(Events.ClientReady, async () => {
     options: []
   };
 
+  const claimCommand = {
+    name: 'claim',
+    description: 'Klaim akun member yang didaftarkan dari WhatsApp',
+    options: [
+      { name: 'roblox_name', description: 'Nama Roblox kamu (harus sama persis)', type: 3, required: true }
+    ]
+  };
+
   try {
-    await client.application.commands.set([setupCommand, rankCommand, leaderboardCommand]);
+    await client.application.commands.set([setupCommand, rankCommand, leaderboardCommand, claimCommand]);
     console.log("✅ Global Slash Commands registered.");
   } catch (err) {
     console.error("❌ Failed to register slash commands:", err);
@@ -1490,6 +1496,73 @@ client.on(Events.InteractionCreate, async interaction => {
       return interaction.editReply({ embeds: [embed] });
     } catch (err) {
       return interaction.editReply(`❌ Error: ${err.message}`);
+    }
+  }
+
+  // === /claim COMMAND ===
+  if (interaction.commandName === 'claim') {
+    if (!interaction.guild) return interaction.reply({ content: "❌ Command ini hanya bisa digunakan di server.", flags: 64 });
+    await interaction.deferReply({ flags: 64 });
+    try {
+      const robloxName = interaction.options.getString('roblox_name').trim();
+      const guildId = interaction.guild.id;
+      const userId = interaction.user.id;
+
+      // Validate name
+      const validation = validateRobloxName(robloxName);
+      if (!validation.valid) return interaction.editReply({ content: validation.error });
+
+      // Search in Supabase
+      const { data: memberRecord, error } = await supabase.from("members").select("*").eq("guild_id", guildId).ilike("roblox_name", robloxName).single();
+
+      if (error || !memberRecord) {
+        return interaction.editReply({ content: "❌ Nama Roblox tidak ditemukan di database. Pastikan sudah didaftarkan." });
+      }
+
+      // Check if already claimed by a real Discord user
+      if (!memberRecord.user_id.startsWith("wa_")) {
+        return interaction.editReply({ content: "❌ Akun ini sudah diklaim oleh Discord user lain." });
+      }
+
+      // Claim: update user_id to real Discord ID
+      const { error: updateError } = await supabase.from("members").update({ user_id: userId, updated_at: new Date().toISOString() }).eq("guild_id", guildId).eq("user_id", memberRecord.user_id);
+      if (updateError) return interaction.editReply({ content: "❌ Gagal klaim akun. Coba lagi." });
+
+      // Update local cache
+      const guildData = getGuildMembers(guildId);
+      // Remove old wa_ entry and add with real ID
+      if (guildData.members[memberRecord.user_id]) {
+        guildData.members[userId] = { ...guildData.members[memberRecord.user_id] };
+        delete guildData.members[memberRecord.user_id];
+      } else {
+        guildData.members[userId] = { robloxName: memberRecord.roblox_name, nickname: memberRecord.nickname, address: memberRecord.address, registeredAt: new Date(memberRecord.registered_at).getTime(), updatedAt: Date.now() };
+      }
+      saveMembers();
+
+      // Auto-assign Member role
+      let roleMsg = "";
+      const memberRoleId = getConfig(guildId, "MEMBER_ROLE_ID");
+      if (memberRoleId) {
+        try { await interaction.member.roles.add(memberRoleId); roleMsg = "\n✅ Role **Member** diberikan."; } catch { roleMsg = "\n⚠️ Role Member tidak bisa diberikan (bot tidak punya izin)."; }
+      }
+
+      // Set nickname
+      let nickMsg = "";
+      try { await interaction.member.setNickname(robloxName); } catch { nickMsg = "\n⚠️ Nickname tidak bisa diubah (bot tidak punya izin)."; }
+
+      // Update list embed
+      await updateMemberListEmbed(interaction.guild, guildId);
+
+      // Log
+      const logChannel = getMemberLogChannel(interaction.guild, guildId);
+      if (logChannel) {
+        const logEmbed = new EmbedBuilder().setColor("#9B59B6").setTitle("📋 Member Claimed").setDescription(`${interaction.user} mengklaim akun **${robloxName}**`).setTimestamp();
+        logChannel.send({ embeds: [logEmbed] }).catch(() => {});
+      }
+
+      return interaction.editReply({ content: `✅ **Berhasil!** Akun **${robloxName}** sekarang terhubung ke Discord kamu.${roleMsg}${nickMsg}\n\nSekarang kamu bisa memilih gender (MAN/WOMAN) di panel Role.` });
+    } catch (err) {
+      return interaction.editReply({ content: `❌ Error: ${err.message}` });
     }
   }
 
@@ -2588,35 +2661,19 @@ client.on(Events.InteractionCreate, async interaction => {
       return interaction.editReply({ content: `✅ **Verifikasi Berhasil!**\n\nSilakan ambil role gender kamu di channel <#${roleChId}>.` });
     }
 
-    /* MEMBER ROLE */
+    /* MEMBER ROLE (deprecated - auto-assigned now) */
     if (interaction.customId === "member_role") {
-      const memberRoleId = getConfig(guildId, "MEMBER_ROLE_ID");
-      if (!memberRoleId) return interaction.editReply({ content: "❌ Role Member belum dikonfigurasi." });
-      if (member.roles.cache.has(memberRoleId)) return interaction.editReply({ content: "⚠️ Kamu sudah memiliki role **MEMBER 📋**!" });
-      // Check if member has Input Data
-      const memberData = getMemberData(guildId, member.id);
-      if (!memberData) {
-        const panelChId = getGuildMembers(guildId).panelChannelId || getConfig(guildId, "MEMBER_PANEL_CHANNEL_ID");
-        const channelRef = panelChId ? ` Silakan daftar di <#${panelChId}>.` : "";
-        return interaction.editReply({ content: `❌ Kamu harus **Input Data** terlebih dahulu sebelum mengambil role Member!${channelRef}` });
-      }
-      await member.roles.add(memberRoleId).catch(() => {});
-      return interaction.editReply({ content: "✅ **Role MEMBER 📋 Berhasil Diberikan!**\n\nSekarang kamu bisa memilih gender (MAN/WOMAN)." });
+      return interaction.editReply({ content: "ℹ️ Tombol ini sudah tidak diperlukan. Role Member sekarang diberikan otomatis setelah **Input Data** atau `/claim`." });
     }
 
     /* GENDER ROLES */
     if (interaction.customId === "man_role") {
-      // Check registration requirement
+      // Check registration requirement only (no Member role check)
       const memberData = getMemberData(guildId, member.id);
       if (!memberData) {
         const panelChId = getGuildMembers(guildId).panelChannelId || getConfig(guildId, "MEMBER_PANEL_CHANNEL_ID");
-        const channelRef = panelChId ? ` Silakan daftar di <#${panelChId}>.` : "";
-        return interaction.editReply({ content: `❌ Kamu harus Input Data terlebih dahulu di Panel Member sebelum mengambil role!${channelRef}` });
-      }
-      // Check Member role requirement
-      const memberRoleId = getConfig(guildId, "MEMBER_ROLE_ID");
-      if (memberRoleId && !member.roles.cache.has(memberRoleId)) {
-        return interaction.editReply({ content: "❌ Kamu harus mengambil role **MEMBER 📋** terlebih dahulu sebelum memilih gender!" });
+        const channelRef = panelChId ? ` Silakan daftar di <#${panelChId}> atau gunakan \`/claim\`.` : " Gunakan **Input Data** atau `/claim`.";
+        return interaction.editReply({ content: `❌ Kamu harus Input Data terlebih dahulu sebelum mengambil role!${channelRef}` });
       }
       const manRoleId = getConfig(guildId, "MAN_ROLE_ID");
       const womanRoleId = getConfig(guildId, "WOMAN_ROLE_ID");
@@ -2624,20 +2681,15 @@ client.on(Events.InteractionCreate, async interaction => {
       if (womanRoleId) await member.roles.remove(womanRoleId).catch(() => {});
       await member.roles.add(manRoleId).catch(() => {});
       const chatChId = getConfig(guildId, "CHAT_CHANNEL_ID");
-      return interaction.editReply({ content: `✅ **Role MAN 💪 Berhasil Diberikan!**\n\nSekarang kamu bisa chatting di <#${chatChId}>.` });
+      return interaction.editReply({ content: `✅ **Role MAN � Berhasil Diberikan!**\n\nSekarang kamu bisa chatting di <#${chatChId}>.` });
     }
     if (interaction.customId === "woman_role") {
-      // Check registration requirement
+      // Check registration requirement only (no Member role check)
       const memberData = getMemberData(guildId, member.id);
       if (!memberData) {
         const panelChId = getGuildMembers(guildId).panelChannelId || getConfig(guildId, "MEMBER_PANEL_CHANNEL_ID");
-        const channelRef = panelChId ? ` Silakan daftar di <#${panelChId}>.` : "";
-        return interaction.editReply({ content: `❌ Kamu harus Input Data terlebih dahulu di Panel Member sebelum mengambil role!${channelRef}` });
-      }
-      // Check Member role requirement
-      const memberRoleId = getConfig(guildId, "MEMBER_ROLE_ID");
-      if (memberRoleId && !member.roles.cache.has(memberRoleId)) {
-        return interaction.editReply({ content: "❌ Kamu harus mengambil role **MEMBER 📋** terlebih dahulu sebelum memilih gender!" });
+        const channelRef = panelChId ? ` Silakan daftar di <#${panelChId}> atau gunakan \`/claim\`.` : " Gunakan **Input Data** atau `/claim`.";
+        return interaction.editReply({ content: `❌ Kamu harus Input Data terlebih dahulu sebelum mengambil role!${channelRef}` });
       }
       const manRoleId = getConfig(guildId, "MAN_ROLE_ID");
       const womanRoleId = getConfig(guildId, "WOMAN_ROLE_ID");
@@ -3311,8 +3363,17 @@ client.on(Events.InteractionCreate, async interaction => {
         // Set cooldown
         setMemberCooldown(guildId, member.id, "input_data");
 
+        // Auto-assign Member role
+        let roleMsg = "";
+        const memberRoleId = getConfig(guildId, "MEMBER_ROLE_ID");
+        if (memberRoleId && !member.roles.cache.has(memberRoleId)) {
+          try { await member.roles.add(memberRoleId); roleMsg = "\n✅ Role **Member** diberikan otomatis."; } catch { roleMsg = "\n⚠️ Role Member tidak bisa diberikan (bot tidak punya izin)."; }
+        }
+
         let reply = "✅ **Berhasil!** Data kamu telah disimpan.";
         if (nickFailed) reply += "\n⚠️ Nickname tidak bisa diubah (bot tidak punya izin).";
+        reply += roleMsg;
+        reply += "\n\nSekarang kamu bisa memilih gender (MAN/WOMAN) di panel Role.";
         return interaction.editReply({ content: reply });
       }
 
