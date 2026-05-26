@@ -1304,7 +1304,26 @@ client.on(Events.GuildMemberAdd, async member => {
 /* ================= GOODBYE ================= */
 
 client.on(Events.GuildMemberRemove, async member => {
-  const welcomeChannelId = getConfig(member.guild.id, "WELCOME_CHANNEL");
+  const guildId = member.guild.id;
+
+  // Auto-remove from member list
+  const guildData = getGuildMembers(guildId);
+  if (guildData.members[member.id]) {
+    const removedData = guildData.members[member.id];
+    delete guildData.members[member.id];
+    saveMembers();
+    dbDeleteMember(guildId, member.id).catch(() => {});
+    await updateMemberListEmbed(member.guild, guildId).catch(() => {});
+
+    // Log removal
+    const logChannel = getMemberLogChannel(member.guild, guildId);
+    if (logChannel) {
+      logChannel.send({ embeds: [new EmbedBuilder().setColor("Red").setTitle("📋 Member Removed (Left Server)").setDescription(`**${member.user.tag}** keluar dari server.\nData dihapus: ${removedData.robloxName} [${removedData.nickname}]`).setTimestamp()] }).catch(() => {});
+    }
+  }
+
+  // Goodbye card
+  const welcomeChannelId = getConfig(guildId, "WELCOME_CHANNEL");
   const channel = member.guild.channels.cache.get(welcomeChannelId);
   if (!channel) return;
   const image = await createGoodbye(member);
