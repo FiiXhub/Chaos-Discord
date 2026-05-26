@@ -1,0 +1,9 @@
+node_modules/
+.env
+backups/
+error.log
+*.tmp
+members.json
+warns.json
+levels.json
+guilds_config.json

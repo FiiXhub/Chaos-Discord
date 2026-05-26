@@ -1,0 +1,16 @@
+{
+  "name": "fii-discord-bot",
+  "version": "1.0.0",
+  "description": "Discord Bot by Fii",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.106.2",
+    "axios": "^1.13.6",
+    "canvas": "^3.2.1",
+    "discord.js": "^14.25.1",
+    "dotenv": "^16.6.1"
+  }
+}
