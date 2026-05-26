@@ -779,6 +779,7 @@ async function deployPanels(guild, config, channels) {
         const pmRow2 = new ActionRowBuilder().addComponents(
           new ButtonBuilder().setCustomId("pm_claim").setLabel("Claim").setEmoji("🔗").setStyle(ButtonStyle.Success),
           new ButtonBuilder().setCustomId("pm_delete").setLabel("Delete").setEmoji("🗑️").setStyle(ButtonStyle.Danger),
+          new ButtonBuilder().setCustomId("pm_cleanup").setLabel("Cleanup").setEmoji("🧹").setStyle(ButtonStyle.Secondary),
           new ButtonBuilder().setCustomId("pm_title").setLabel("Title").setEmoji("📝").setStyle(ButtonStyle.Secondary)
         );
         const panelMsg = await memberPanelCh.send({ embeds: [pmEmbed], components: [pmRow1, pmRow2] });
@@ -3297,6 +3298,38 @@ client.on(Events.InteractionCreate, async interaction => {
           new UserSelectMenuBuilder().setCustomId("pm_select_delete").setPlaceholder("Pilih member untuk dihapus dari list").setMinValues(1).setMaxValues(1)
         );
         return interaction.reply({ content: "🗑️ **Pilih member yang ingin dihapus dari list:**", components: [row], flags: 64 });
+      }
+
+      // --- CLEANUP (Staff Only) - Remove members who left server ---
+      if (interaction.customId === "pm_cleanup") {
+        if (!hasStaffAccess(member, guildId)) return interaction.reply({ content: "❌ Hanya admin!", flags: 64 });
+        await interaction.deferReply({ flags: 64 });
+        const guildData = getGuildMembers(guildId);
+        const memberIds = Object.keys(guildData.members);
+        let removed = 0;
+        const removedNames = [];
+
+        for (const userId of memberIds) {
+          // Skip WA placeholder IDs
+          if (userId.startsWith("wa_")) continue;
+          // Check if member still in server
+          const guildMember = await interaction.guild.members.fetch(userId).catch(() => null);
+          if (!guildMember) {
+            const data = guildData.members[userId];
+            removedNames.push(`${data.robloxName} [${data.nickname}]`);
+            delete guildData.members[userId];
+            dbDeleteMember(guildId, userId).catch(() => {});
+            removed++;
+          }
+        }
+
+        if (removed > 0) {
+          saveMembers();
+          await updateMemberListEmbed(interaction.guild, guildId);
+          return interaction.editReply({ content: `✅ **Cleanup selesai!** ${removed} member yang sudah keluar dihapus dari list:\n${removedNames.map((n, i) => `${i + 1}. ${n}`).join("\n")}` });
+        } else {
+          return interaction.editReply({ content: "✅ Tidak ada member yang perlu dihapus. Semua member masih ada di server." });
+        }
       }
     }
 
