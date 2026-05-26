@@ -1,4 +1,5 @@
 # Implementation Plan: Panel Member System
+# Implementation Plan: Panel Member System
 
 ## Overview
 
