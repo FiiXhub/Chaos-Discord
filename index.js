@@ -607,9 +607,8 @@ async function deployPanels(guild, config, channels) {
         const rRow = new ActionRowBuilder().addComponents(
           new ButtonBuilder().setCustomId("man_role").setLabel("MAN").setEmoji("💪").setStyle(ButtonStyle.Primary),
           new ButtonBuilder().setCustomId("woman_role").setLabel("WOMAN").setEmoji("🌸").setStyle(ButtonStyle.Secondary),
-          new ButtonBuilder().setCustomId("claim_role").setLabel("CLAIM").setEmoji("🔗").setStyle(ButtonStyle.Success),
-          new ButtonBuilder().setCustomId("admin_role").setLabel("ADMIN").setEmoji("👑").setStyle(ButtonStyle.Danger),
-          new ButtonBuilder().setCustomId("profile_button").setLabel("PROFILE").setEmoji("👤").setStyle(ButtonStyle.Secondary)
+          new ButtonBuilder().setCustomId("admin_role").setLabel("ADMIN").setEmoji("�").setStyle(ButtonStyle.Danger),
+          new ButtonBuilder().setCustomId("profile_button").setLabel("PROFILE").setEmoji("�").setStyle(ButtonStyle.Secondary)
         );
         await roleCh.send({ embeds: [rEmbed], components: [rRow] });
         results.success.push("Role Panel");
@@ -778,8 +777,9 @@ async function deployPanels(guild, config, channels) {
           new ButtonBuilder().setCustomId("pm_edit").setLabel("Edit").setStyle(ButtonStyle.Secondary)
         );
         const pmRow2 = new ActionRowBuilder().addComponents(
-          new ButtonBuilder().setCustomId("pm_delete").setLabel("🗑️ Delete").setStyle(ButtonStyle.Danger),
-          new ButtonBuilder().setCustomId("pm_title").setLabel("📝 Title").setStyle(ButtonStyle.Secondary)
+          new ButtonBuilder().setCustomId("pm_claim").setLabel("Claim").setEmoji("🔗").setStyle(ButtonStyle.Success),
+          new ButtonBuilder().setCustomId("pm_delete").setLabel("Delete").setEmoji("🗑️").setStyle(ButtonStyle.Danger),
+          new ButtonBuilder().setCustomId("pm_title").setLabel("Title").setEmoji("📝").setStyle(ButtonStyle.Secondary)
         );
         const panelMsg = await memberPanelCh.send({ embeds: [pmEmbed], components: [pmRow1, pmRow2] });
         guildData.panelMessageId = panelMsg.id;
@@ -2648,7 +2648,10 @@ client.on(Events.InteractionCreate, async interaction => {
   cooldown.set(member.id, Date.now());
 
   try {
-    if (!interaction.deferred && !interaction.replied) await interaction.deferReply({ flags: 64 }).catch(() => {});
+    // Skip deferReply for buttons that show modals
+    if (interaction.customId !== "claim_role") {
+      if (!interaction.deferred && !interaction.replied) await interaction.deferReply({ flags: 64 }).catch(() => {});
+    }
 
     /* VERIFY */
     if (interaction.customId === "verify_button") {
@@ -2662,9 +2665,9 @@ client.on(Events.InteractionCreate, async interaction => {
       return interaction.editReply({ content: `✅ **Verifikasi Berhasil!**\n\nSilakan ambil role gender kamu di channel <#${roleChId}>.` });
     }
 
-    /* CLAIM ROLE (button version of /claim) */
+    /* CLAIM ROLE (button version - redirect to panel member) */
     if (interaction.customId === "claim_role") {
-      const modal = new ModalBuilder().setCustomId("modal_claim").setTitle("🔗 Claim Akun Member");
+      const modal = new ModalBuilder().setCustomId("modal_pm_claim").setTitle("🔗 Claim Akun Member");
       modal.addComponents(
         new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("roblox_name").setLabel("Nama Roblox kamu (dari WhatsApp)").setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(20).setPlaceholder("contoh: FiiCruzhCHAOS"))
       );
@@ -2983,62 +2986,10 @@ client.on(Events.InteractionCreate, async interaction => {
   try {
     const guildId = interaction.guild.id;
 
-    // === CLAIM MODAL HANDLER ===
+    // === CLAIM MODAL HANDLER (legacy - now handled by modal_pm_claim in Panel Member system) ===
     if (interaction.customId === "modal_claim") {
-      await interaction.deferReply({ flags: 64 });
-      const robloxName = interaction.fields.getTextInputValue("roblox_name").trim();
-      const userId = interaction.user.id;
-
-      // Validate name
-      const validation = validateRobloxName(robloxName);
-      if (!validation.valid) return interaction.editReply({ content: validation.error });
-
-      // Search in Supabase
-      const { data: memberRecord, error } = await supabase.from("members").select("*").eq("guild_id", guildId).ilike("roblox_name", robloxName).single();
-
-      if (error || !memberRecord) {
-        return interaction.editReply({ content: "❌ Nama Roblox tidak ditemukan di database. Pastikan sudah didaftarkan dari WhatsApp." });
-      }
-
-      if (!memberRecord.user_id.startsWith("wa_")) {
-        return interaction.editReply({ content: "❌ Akun ini sudah diklaim oleh Discord user lain." });
-      }
-
-      // Claim: update user_id
-      const { error: updateError } = await supabase.from("members").update({ user_id: userId, updated_at: new Date().toISOString() }).eq("guild_id", guildId).eq("user_id", memberRecord.user_id);
-      if (updateError) return interaction.editReply({ content: "❌ Gagal klaim akun. Coba lagi." });
-
-      // Update local cache
-      const guildData = getGuildMembers(guildId);
-      if (guildData.members[memberRecord.user_id]) {
-        guildData.members[userId] = { ...guildData.members[memberRecord.user_id] };
-        delete guildData.members[memberRecord.user_id];
-      } else {
-        guildData.members[userId] = { robloxName: memberRecord.roblox_name, nickname: memberRecord.nickname, address: memberRecord.address, registeredAt: new Date(memberRecord.registered_at).getTime(), updatedAt: Date.now() };
-      }
-      saveMembers();
-
-      // Auto-assign Member role
-      let roleMsg = "";
-      const memberRoleId = getConfig(guildId, "MEMBER_ROLE_ID");
-      if (memberRoleId) {
-        try { await interaction.member.roles.add(memberRoleId); roleMsg = "\n✅ Role **Member** diberikan."; } catch { roleMsg = "\n⚠️ Role Member tidak bisa diberikan."; }
-      }
-
-      // Set nickname
-      let nickMsg = "";
-      try { await interaction.member.setNickname(robloxName); } catch { nickMsg = "\n⚠️ Nickname tidak bisa diubah."; }
-
-      // Update list
-      await updateMemberListEmbed(interaction.guild, guildId);
-
-      // Log
-      const logChannel = getMemberLogChannel(interaction.guild, guildId);
-      if (logChannel) {
-        logChannel.send({ embeds: [new EmbedBuilder().setColor("#9B59B6").setTitle("📋 Member Claimed").setDescription(`${interaction.user} mengklaim akun **${robloxName}**`).setTimestamp()] }).catch(() => {});
-      }
-
-      return interaction.editReply({ content: `✅ **Berhasil!** Akun **${robloxName}** sekarang terhubung ke Discord kamu.${roleMsg}${nickMsg}\n\nSekarang kamu bisa memilih gender (MAN/WOMAN).` });
+      // Redirect to modal_pm_claim handler - same logic
+      return; // Handled by Panel Member system via modal_pm_claim
     }
 
     if (interaction.customId === "modal_create_role") {
@@ -3311,6 +3262,15 @@ client.on(Events.InteractionCreate, async interaction => {
         return interaction.showModal(modal);
       }
 
+      // --- CLAIM (button in Panel Member) ---
+      if (interaction.customId === "pm_claim") {
+        const modal = new ModalBuilder().setCustomId("modal_pm_claim").setTitle("🔗 Claim Akun Member");
+        modal.addComponents(
+          new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("roblox_name").setLabel("Nama Roblox kamu (dari WhatsApp)").setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(20).setPlaceholder("contoh: FiiCruzhCHAOS"))
+        );
+        return interaction.showModal(modal);
+      }
+
       // --- DELETE MEMBER (Staff Only) ---
       if (interaction.customId === "pm_delete") {
         if (!hasStaffAccess(member, guildId)) return interaction.reply({ content: "❌ Hanya admin!", flags: 64 });
@@ -3541,6 +3501,63 @@ client.on(Events.InteractionCreate, async interaction => {
         let reply = `✅ **Berhasil!** Nama Roblox <@${targetId}> telah diubah menjadi **${robloxName}**.`;
         if (nickFailed) reply += "\n⚠️ Nickname tidak bisa diubah (bot tidak punya izin).";
         return interaction.editReply({ content: reply });
+      }
+
+      // --- CLAIM MODAL (from Panel Member button) ---
+      if (interaction.customId === "modal_pm_claim") {
+        await interaction.deferReply({ flags: 64 });
+        const robloxName = interaction.fields.getTextInputValue("roblox_name").trim();
+        const userId = member.id;
+
+        const validation = validateRobloxName(robloxName);
+        if (!validation.valid) return interaction.editReply({ content: validation.error });
+
+        // Search in Supabase
+        const { data: memberRecord, error } = await supabase.from("members").select("*").eq("guild_id", guildId).ilike("roblox_name", robloxName).single();
+
+        if (error || !memberRecord) {
+          return interaction.editReply({ content: "❌ Nama Roblox tidak ditemukan di database. Pastikan sudah didaftarkan dari WhatsApp." });
+        }
+
+        if (!memberRecord.user_id.startsWith("wa_")) {
+          return interaction.editReply({ content: "❌ Akun ini sudah diklaim oleh Discord user lain." });
+        }
+
+        // Claim: update user_id
+        const { error: updateError } = await supabase.from("members").update({ user_id: userId, updated_at: new Date().toISOString() }).eq("guild_id", guildId).eq("user_id", memberRecord.user_id);
+        if (updateError) return interaction.editReply({ content: "❌ Gagal klaim akun. Coba lagi." });
+
+        // Update local cache
+        const guildData = getGuildMembers(guildId);
+        if (guildData.members[memberRecord.user_id]) {
+          guildData.members[userId] = { ...guildData.members[memberRecord.user_id] };
+          delete guildData.members[memberRecord.user_id];
+        } else {
+          guildData.members[userId] = { robloxName: memberRecord.roblox_name, nickname: memberRecord.nickname, address: memberRecord.address, registeredAt: new Date(memberRecord.registered_at).getTime(), updatedAt: Date.now() };
+        }
+        saveMembers();
+
+        // Auto-assign Member role
+        let roleMsg = "";
+        const memberRoleId = getConfig(guildId, "MEMBER_ROLE_ID");
+        if (memberRoleId) {
+          try { await member.roles.add(memberRoleId); roleMsg = "\n✅ Role **Member** diberikan."; } catch { roleMsg = "\n⚠️ Role Member tidak bisa diberikan."; }
+        }
+
+        // Set nickname
+        let nickMsg = "";
+        try { await member.setNickname(robloxName); } catch { nickMsg = "\n⚠️ Nickname tidak bisa diubah."; }
+
+        // Update list
+        await updateMemberListEmbed(interaction.guild, guildId);
+
+        // Log
+        const logChannel = getMemberLogChannel(interaction.guild, guildId);
+        if (logChannel) {
+          logChannel.send({ embeds: [new EmbedBuilder().setColor("#9B59B6").setTitle("📋 Member Claimed").setDescription(`${interaction.user} mengklaim akun **${robloxName}**`).setTimestamp()] }).catch(() => {});
+        }
+
+        return interaction.editReply({ content: `✅ **Berhasil!** Akun **${robloxName}** sekarang terhubung ke Discord kamu.${roleMsg}${nickMsg}\n\nSekarang kamu bisa memilih gender (MAN/WOMAN) di panel Role.` });
       }
 
       // --- TITLE CHANGE MODAL ---
