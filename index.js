@@ -310,6 +310,7 @@ async function updateMemberListEmbed(guild, guildId) {
   const newMsg = await channel.send({ embeds: [embed] });
   guildData.listMessageId = newMsg.id;
   saveMembers();
+  dbSaveGuildMemberSettings(guildId, guildData).catch(() => {});
 }
 
 /* ================= DATABASE SYSTEM (Multi-Guild) ================= */
@@ -423,10 +424,6 @@ function backupConfig() {
 
 function saveGuilds() {
   saveGuildsLocal();
-  // Async sync to Supabase (non-blocking)
-  for (const [guildId, config] of Object.entries(guildsCache)) {
-    dbSaveGuildConfig(guildId, config).catch(() => {});
-  }
 }
 
 function saveGuildsLocal() {
@@ -445,9 +442,12 @@ function saveLevels() {
   } catch (err) {
     console.error("❌ Error saving levels:", err);
   }
-  // Async sync to Supabase
+}
+
+// Batch sync levels to Supabase (called periodically, not on every XP gain)
+async function syncLevelsToSupabase() {
   for (const [userId, data] of Object.entries(levelsCache)) {
-    dbSaveLevel(userId, data).catch(() => {});
+    await dbSaveLevel(userId, data).catch(() => {});
   }
 }
 
@@ -457,7 +457,9 @@ function getGuildConfig(guildId) {
 
 function saveGuildConfig(guildId, config) {
   guildsCache[guildId] = { ...(guildsCache[guildId] || {}), ...config };
-  saveGuilds();
+  saveGuildsLocal();
+  // Sync only this guild to Supabase
+  dbSaveGuildConfig(guildId, guildsCache[guildId]).catch(() => {});
   return true;
 }
 
@@ -853,7 +855,7 @@ client.once(Events.ClientReady, async () => {
 
   updateStats();
   setInterval(() => xpCooldown.clear(), 3600000);
-  setInterval(saveLevels, 300000);
+  setInterval(() => { saveLevels(); syncLevelsToSupabase(); }, 300000);
 
   // Cleanup stale setup sessions
   setInterval(() => {
