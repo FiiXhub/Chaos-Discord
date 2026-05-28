@@ -246,9 +246,9 @@ function getMemberData(guildId, userId) {
 function validateRobloxName(name) {
   if (!name || !name.trim()) return { valid: false, error: "❌ Nama Roblox wajib diisi!" };
   const trimmed = name.trim();
-  if (trimmed.length < 6) return { valid: false, error: "❌ Nama Roblox minimal 6 karakter (termasuk CHAOS)!" };
+  if (trimmed.length < 6) return { valid: false, error: "❌ Nama Roblox minimal 6 karakter!" };
   if (trimmed.length > 20) return { valid: false, error: "❌ Nama Roblox maksimal 20 karakter!" };
-  if (!trimmed.endsWith("CHAOS")) return { valid: false, error: "❌ Nama Roblox harus diakhiri dengan **CHAOS** (huruf kapital)!" };
+  if (!trimmed.startsWith("CHAOS") && !trimmed.endsWith("CHAOS")) return { valid: false, error: "❌ Nama Roblox harus diawali atau diakhiri dengan **CHAOS** (huruf kapital)!" };
   return { valid: true };
 }
 
